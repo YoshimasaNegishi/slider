@@ -6,9 +6,21 @@
 <title>全幅スライダー（上半分表示）</title>
 
 <style>
+    /* ========================================
+       CSS変数（設定値の一元管理）
+       ======================================== */
+    :root {
+        --slider-width: 4px;           /* スライダーバーの幅 */
+        --slider-handle-size: 44px;    /* 丸ハンドルのサイズ */
+        --slider-initial-pos: 50%;     /* 初期位置 */
+        --aspect-ratio-padding: 40%;   /* アスペクト比（高さ/幅）*/
+        --slider-color: #fff;          /* スライダーの色 */
+        --bg-color: #111;              /* 背景色 */
+    }
+
     body {
         margin: 0;
-        background: #111;
+        background: var(--bg-color);
         font-family: sans-serif;
     }
 
@@ -21,12 +33,14 @@
         position: relative;
     }
 
-    /* ★ 表示高さ決め（調整ポイント） */
+    /* ★ 表示高さ決め
+       padding-bottomハック: 幅に対する比率で高さを確保
+       例: 40% = 高さが幅の40%（5:2のアスペクト比）*/
     .image-wrapper {
         position: relative;
         width: 100%;
         height: 0;
-        padding-bottom: 40%; 
+        padding-bottom: var(--aspect-ratio-padding);
     }
 
     .image-before,
@@ -46,75 +60,320 @@
         -webkit-user-drag: none;
         pointer-events: none;
 
-        /* ジャギー軽減 */
-        image-rendering: -webkit-optimize-contrast;
+        /* GPUアクセラレーション有効化 */
         transform: translateZ(0);
         backface-visibility: hidden;
+        will-change: clip-path;
     }
 
     .image-after {
-        clip-path: inset(0 0 0 50%);
+        clip-path: inset(0 0 0 var(--slider-initial-pos));
     }
 
+    /* スライダー本体 */
     .slider {
         position: absolute;
         top: 0;
-        left: 50%;
-        width: 4px;
+        left: var(--slider-initial-pos);
+        width: var(--slider-width);
         height: 100%;
-        background: #fff;
+        background: var(--slider-color);
         cursor: ew-resize;
         transform: translateX(-50%);
         z-index: 10;
+        will-change: left;
     }
 
+    /* スライダーの丸ハンドル */
     .slider::before {
-        content:"";
-        position:absolute;
-        top:50%;
-        left:50%;
-        transform:translate(-50%,-50%);
-        width:44px;
-        height:44px;
-        border-radius:50%;
-        background:#fff;
-        box-shadow:0 4px 12px rgba(0,0,0,0.4);
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: var(--slider-handle-size);
+        height: var(--slider-handle-size);
+        border-radius: 50%;
+        background: var(--slider-color);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+
+    /* フォーカス時のスタイル（アクセシビリティ） */
+    .slider:focus {
+        outline: none;
+    }
+    .slider:focus-visible::before {
+        box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
     }
 </style>
 </head>
 <body>
 
-<div class="comparison-container" id="comparison">
+<div class="comparison-container" id="comparison" role="group" aria-label="画像比較スライダー">
     <div class="image-wrapper">
-        <img class="image-before" id="img-before" src="before.jpg" alt="Before" />
-        <img class="image-after" id="img-after" src="after.jpg" alt="After" />
-        <div class="slider" id="slider"></div>
+        <img class="image-before" id="img-before" src="before.jpg" alt="変更前の画像" />
+        <img class="image-after" id="img-after" src="after.jpg" alt="変更後の画像" />
+        <div class="slider"
+             id="slider"
+             role="slider"
+             tabindex="0"
+             aria-label="比較位置"
+             aria-valuemin="0"
+             aria-valuemax="100"
+             aria-valuenow="50"
+             aria-valuetext="50%"></div>
     </div>
 </div>
 
 <script>
-    let isDragging = false;
-    const comparison = document.getElementById("comparison");
-    const slider = document.getElementById("slider");
-    const imgAfter = document.getElementById("img-after");
+/**
+ * 画像比較スライダーコンポーネント
+ * IIFEでスコープを隔離し、グローバル汚染を防止
+ */
+(function() {
+    'use strict';
 
-    function updateSlider(x) {
-        const rect = comparison.getBoundingClientRect();
-        const offsetX = x - rect.left;
-        let percentage = (offsetX / rect.width) * 100;
-        percentage = Math.max(0, Math.min(100, percentage));
+    /* ========================================
+       設定値
+       ======================================== */
+    const CONFIG = {
+        INITIAL_POSITION: 50,    // 初期位置（%）
+        MIN_POSITION: 0,         // 最小位置（%）
+        MAX_POSITION: 100,       // 最大位置（%）
+        KEYBOARD_STEP: 1,        // キーボード操作時の移動量（%）
+        KEYBOARD_STEP_LARGE: 10  // Shift+矢印キーでの移動量（%）
+    };
 
-        slider.style.left = percentage + "%";
-        imgAfter.style.clipPath = `inset(0 0 0 ${percentage}%)`;
+    /* ========================================
+       状態管理
+       ======================================== */
+    const state = {
+        isDragging: false,
+        currentPosition: CONFIG.INITIAL_POSITION,
+        containerRect: null,      // キャッシュされた座標
+        rafId: null               // requestAnimationFrame ID
+    };
+
+    /* ========================================
+       DOM要素の取得と検証
+       ======================================== */
+    const elements = {
+        comparison: document.getElementById('comparison'),
+        slider: document.getElementById('slider'),
+        imgAfter: document.getElementById('img-after'),
+        imgBefore: document.getElementById('img-before')
+    };
+
+    /**
+     * 必須DOM要素の存在を検証
+     * @returns {boolean} すべての要素が存在すればtrue
+     */
+    function validateElements() {
+        const missing = Object.entries(elements)
+            .filter(([, el]) => !el)
+            .map(([name]) => name);
+
+        if (missing.length > 0) {
+            console.error('[Slider] 必須要素が見つかりません:', missing.join(', '));
+            return false;
+        }
+        return true;
     }
 
-    slider.addEventListener("mousedown", () => isDragging = true);
-    document.addEventListener("mouseup", () => isDragging = false);
-    document.addEventListener("mousemove", e => isDragging && updateSlider(e.clientX));
+    /* ========================================
+       座標キャッシング
+       ======================================== */
+    /**
+     * コンテナの座標をキャッシュ
+     * リサイズ時に再計算される
+     */
+    function updateContainerRect() {
+        state.containerRect = elements.comparison.getBoundingClientRect();
+    }
 
-    slider.addEventListener("touchstart", e => { isDragging = true; e.preventDefault(); });
-    document.addEventListener("touchend", () => isDragging = false);
-    document.addEventListener("touchmove", e => isDragging && updateSlider(e.touches[0].clientX));
+    /* ========================================
+       スライダー更新処理
+       ======================================== */
+    /**
+     * スライダー位置を更新
+     * @param {number} percentage - 位置（0-100%）
+     */
+    function setSliderPosition(percentage) {
+        // 範囲を制限（0-100%）
+        percentage = Math.max(CONFIG.MIN_POSITION, Math.min(CONFIG.MAX_POSITION, percentage));
+        state.currentPosition = percentage;
+
+        // DOM更新
+        elements.slider.style.left = percentage + '%';
+        elements.imgAfter.style.clipPath = `inset(0 0 0 ${percentage}%)`;
+
+        // ARIA属性を更新（アクセシビリティ）
+        elements.slider.setAttribute('aria-valuenow', Math.round(percentage));
+        elements.slider.setAttribute('aria-valuetext', Math.round(percentage) + '%');
+    }
+
+    /**
+     * X座標からスライダー位置を計算して更新
+     * @param {number} clientX - マウス/タッチのX座標
+     */
+    function updateSliderFromX(clientX) {
+        if (!state.containerRect || state.containerRect.width === 0) {
+            updateContainerRect();
+        }
+
+        // ゼロ除算防止
+        if (state.containerRect.width === 0) return;
+
+        const offsetX = clientX - state.containerRect.left;
+        const percentage = (offsetX / state.containerRect.width) * 100;
+        setSliderPosition(percentage);
+    }
+
+    /**
+     * requestAnimationFrameでスロットリングされた更新
+     * @param {number} clientX - マウス/タッチのX座標
+     */
+    function throttledUpdate(clientX) {
+        if (state.rafId) {
+            cancelAnimationFrame(state.rafId);
+        }
+        state.rafId = requestAnimationFrame(() => {
+            updateSliderFromX(clientX);
+            state.rafId = null;
+        });
+    }
+
+    /* ========================================
+       イベントハンドラ
+       ======================================== */
+    /**
+     * ドラッグ開始
+     * @param {Event} e - イベントオブジェクト
+     */
+    function handleDragStart(e) {
+        state.isDragging = true;
+        updateContainerRect(); // ドラッグ開始時に座標を更新
+        e.preventDefault();
+    }
+
+    /**
+     * ドラッグ終了
+     */
+    function handleDragEnd() {
+        state.isDragging = false;
+        if (state.rafId) {
+            cancelAnimationFrame(state.rafId);
+            state.rafId = null;
+        }
+    }
+
+    /**
+     * マウス移動
+     * @param {MouseEvent} e - マウスイベント
+     */
+    function handleMouseMove(e) {
+        if (state.isDragging) {
+            throttledUpdate(e.clientX);
+        }
+    }
+
+    /**
+     * タッチ移動
+     * @param {TouchEvent} e - タッチイベント
+     */
+    function handleTouchMove(e) {
+        if (state.isDragging && e.touches.length > 0) {
+            e.preventDefault(); // スクロール防止
+            throttledUpdate(e.touches[0].clientX);
+        }
+    }
+
+    /**
+     * キーボード操作
+     * @param {KeyboardEvent} e - キーボードイベント
+     */
+    function handleKeyDown(e) {
+        const step = e.shiftKey ? CONFIG.KEYBOARD_STEP_LARGE : CONFIG.KEYBOARD_STEP;
+        let newPosition = state.currentPosition;
+
+        switch (e.key) {
+            case 'ArrowLeft':
+            case 'Left':
+                newPosition -= step;
+                break;
+            case 'ArrowRight':
+            case 'Right':
+                newPosition += step;
+                break;
+            case 'Home':
+                newPosition = CONFIG.MIN_POSITION;
+                break;
+            case 'End':
+                newPosition = CONFIG.MAX_POSITION;
+                break;
+            default:
+                return; // 他のキーは無視
+        }
+
+        e.preventDefault();
+        setSliderPosition(newPosition);
+    }
+
+    /* ========================================
+       画像読み込みエラーハンドリング
+       ======================================== */
+    /**
+     * 画像読み込みエラー時の処理
+     * @param {string} imageName - 画像の識別名
+     * @param {Event} e - エラーイベント
+     */
+    function handleImageError(imageName, e) {
+        console.error(`[Slider] 画像の読み込みに失敗しました: ${imageName}`, e.target.src);
+    }
+
+    /* ========================================
+       初期化
+       ======================================== */
+    function initialize() {
+        // DOM要素の検証
+        if (!validateElements()) {
+            return;
+        }
+
+        // 初期座標をキャッシュ
+        updateContainerRect();
+
+        // 画像エラーハンドリング
+        elements.imgBefore.addEventListener('error', (e) => handleImageError('before', e));
+        elements.imgAfter.addEventListener('error', (e) => handleImageError('after', e));
+
+        // マウスイベント
+        elements.slider.addEventListener('mousedown', handleDragStart);
+        document.addEventListener('mouseup', handleDragEnd);
+        document.addEventListener('mousemove', handleMouseMove);
+
+        // タッチイベント（passive: falseでpreventDefaultを有効化）
+        elements.slider.addEventListener('touchstart', handleDragStart, { passive: false });
+        document.addEventListener('touchend', handleDragEnd);
+        document.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+        // キーボードイベント（アクセシビリティ）
+        elements.slider.addEventListener('keydown', handleKeyDown);
+
+        // リサイズ時に座標を再計算
+        window.addEventListener('resize', updateContainerRect);
+
+        // 初期位置を設定
+        setSliderPosition(CONFIG.INITIAL_POSITION);
+    }
+
+    // DOMContentLoaded後に初期化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        initialize();
+    }
+})();
 </script>
 
 </body>
