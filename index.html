@@ -105,6 +105,53 @@
     .slider:focus-visible::before {
         box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
     }
+
+    /* 横画面全画面ボタン */
+    .landscape-fullscreen-btn {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        transition: all 0.3s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .landscape-fullscreen-btn:hover {
+        background: rgba(255, 255, 255, 0.3);
+        transform: scale(1.05);
+    }
+
+    .landscape-fullscreen-btn:active {
+        transform: scale(0.95);
+    }
+
+    /* スマホ縦向き時のみ表示 */
+    @media (max-width: 768px) and (orientation: portrait) {
+        .landscape-fullscreen-btn {
+            display: flex;
+        }
+    }
+
+    /* ボタンアイコン（SVG） */
+    .landscape-fullscreen-btn svg {
+        width: 24px;
+        height: 24px;
+        fill: none;
+        stroke: white;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
 </style>
 </head>
 <body>
@@ -124,6 +171,15 @@
              aria-valuetext="50%"></div>
     </div>
 </div>
+
+<!-- 横画面全画面ボタン -->
+<button class="landscape-fullscreen-btn" id="landscape-btn" aria-label="横画面で全画面表示">
+    <svg viewBox="0 0 24 24">
+        <path d="M9 4H5a2 2 0 0 0-2 2v4m0 4v4a2 2 0 0 0 2 2h4m6 0h4a2 2 0 0 0 2-2v-4m0-4V6a2 2 0 0 0-2-2h-4"/>
+        <path d="M12 8v8" opacity="0.5"/>
+        <path d="M16 12H8" opacity="0.5"/>
+    </svg>
+</button>
 
 <script>
 /**
@@ -332,6 +388,69 @@
     }
 
     /* ========================================
+       横画面全画面モード
+       ======================================== */
+    /**
+     * 横画面全画面モードに切り替え
+     */
+    async function enterLandscapeFullscreen() {
+        const landscapeBtn = document.getElementById('landscape-btn');
+
+        try {
+            // 全画面モードに入る
+            const docElement = document.documentElement;
+            if (docElement.requestFullscreen) {
+                await docElement.requestFullscreen();
+            } else if (docElement.webkitRequestFullscreen) {
+                await docElement.webkitRequestFullscreen();
+            } else if (docElement.mozRequestFullScreen) {
+                await docElement.mozRequestFullScreen();
+            } else if (docElement.msRequestFullscreen) {
+                await docElement.msRequestFullscreen();
+            }
+
+            // 画面を横向きにロック（Screen Orientation API）
+            if (screen.orientation && screen.orientation.lock) {
+                try {
+                    await screen.orientation.lock('landscape');
+                } catch (err) {
+                    console.log('[Slider] 画面の向きをロックできませんでした:', err.message);
+                }
+            }
+        } catch (err) {
+            console.error('[Slider] 全画面表示に失敗しました:', err);
+        }
+    }
+
+    /**
+     * 横画面全画面ボタンの初期化
+     */
+    function initializeLandscapeButton() {
+        const landscapeBtn = document.getElementById('landscape-btn');
+        if (!landscapeBtn) return;
+
+        landscapeBtn.addEventListener('click', enterLandscapeFullscreen);
+
+        // 全画面解除時の処理
+        function handleFullscreenChange() {
+            const isFullscreen = document.fullscreenElement ||
+                                document.webkitFullscreenElement ||
+                                document.mozFullScreenElement ||
+                                document.msFullscreenElement;
+
+            if (!isFullscreen && screen.orientation && screen.orientation.unlock) {
+                // 全画面解除時に画面の向きロックを解除
+                screen.orientation.unlock();
+            }
+        }
+
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+        document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+    }
+
+    /* ========================================
        初期化
        ======================================== */
     function initialize() {
@@ -362,6 +481,9 @@
 
         // リサイズ時に座標を再計算
         window.addEventListener('resize', updateContainerRect);
+
+        // 横画面全画面ボタンの初期化
+        initializeLandscapeButton();
 
         // 初期位置を設定
         setSliderPosition(CONFIG.INITIAL_POSITION);
