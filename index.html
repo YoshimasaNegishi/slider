@@ -122,6 +122,113 @@
             transform-origin: top center;
         }
     }
+
+    /* ========================================
+       フルスクリーン・横向きボタン
+       ======================================== */
+    .fullscreen-btn {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 56px;
+        height: 56px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.9);
+        color: #333;
+        font-size: 24px;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s, background 0.2s;
+    }
+
+    .fullscreen-btn:hover {
+        transform: scale(1.1);
+        background: #fff;
+    }
+
+    .fullscreen-btn:active {
+        transform: scale(0.95);
+    }
+
+    /* 横向きやPCでは非表示 */
+    @media (orientation: landscape), (min-width: 769px) {
+        .fullscreen-btn {
+            display: none;
+        }
+    }
+
+    /* フルスクリーン時のスタイル */
+    .comparison-container:fullscreen,
+    .comparison-container:-webkit-full-screen {
+        background: var(--bg-color);
+        display: flex;
+        align-items: center;
+    }
+
+    .comparison-container:fullscreen .image-wrapper,
+    .comparison-container:-webkit-full-screen .image-wrapper {
+        padding-bottom: 40%;  /* フルスクリーン時は標準比率 */
+    }
+
+    .comparison-container:fullscreen .image-before,
+    .comparison-container:fullscreen .image-after,
+    .comparison-container:-webkit-full-screen .image-before,
+    .comparison-container:-webkit-full-screen .image-after {
+        transform: translateZ(0);  /* ズームリセット */
+    }
+
+    /* 回転ガイド（iOS用） */
+    .rotate-guide {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        z-index: 200;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+    }
+
+    .rotate-guide.show {
+        display: flex;
+    }
+
+    .rotate-guide-icon {
+        font-size: 64px;
+        margin-bottom: 20px;
+        animation: rotate-hint 1.5s ease-in-out infinite;
+    }
+
+    .rotate-guide-text {
+        font-size: 18px;
+        text-align: center;
+        padding: 0 40px;
+    }
+
+    .rotate-guide-close {
+        margin-top: 30px;
+        padding: 12px 32px;
+        border: 2px solid #fff;
+        border-radius: 25px;
+        background: transparent;
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+    }
+
+    @keyframes rotate-hint {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(90deg); }
+    }
 </style>
 </head>
 <body>
@@ -140,6 +247,20 @@
              aria-valuenow="50"
              aria-valuetext="50%"></div>
     </div>
+</div>
+
+<!-- フルスクリーン・横向きボタン（縦向きスマホのみ表示） -->
+<button class="fullscreen-btn" id="fullscreen-btn" aria-label="横向きフルスクリーンで表示">
+    ⤢
+</button>
+
+<!-- 回転ガイド（iOS用） -->
+<div class="rotate-guide" id="rotate-guide">
+    <div class="rotate-guide-icon">📱</div>
+    <div class="rotate-guide-text">
+        横向きに回転すると<br>大きく表示されます
+    </div>
+    <button class="rotate-guide-close" id="rotate-guide-close">閉じる</button>
 </div>
 
 <script>
@@ -390,6 +511,133 @@
     } else {
         initialize();
     }
+})();
+
+/**
+ * フルスクリーン・横向き機能
+ */
+(function() {
+    'use strict';
+
+    const fullscreenBtn = document.getElementById('fullscreen-btn');
+    const rotateGuide = document.getElementById('rotate-guide');
+    const rotateGuideClose = document.getElementById('rotate-guide-close');
+    const comparison = document.getElementById('comparison');
+
+    if (!fullscreenBtn || !comparison) return;
+
+    /**
+     * iOSかどうかを判定
+     */
+    function isIOS() {
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+
+    /**
+     * Screen Orientation APIがサポートされているか
+     */
+    function canLockOrientation() {
+        return screen.orientation && typeof screen.orientation.lock === 'function';
+    }
+
+    /**
+     * フルスクリーンAPIがサポートされているか
+     */
+    function canFullscreen() {
+        return comparison.requestFullscreen ||
+               comparison.webkitRequestFullscreen ||
+               comparison.mozRequestFullScreen ||
+               comparison.msRequestFullscreen;
+    }
+
+    /**
+     * フルスクリーンに入る
+     */
+    async function enterFullscreen() {
+        try {
+            if (comparison.requestFullscreen) {
+                await comparison.requestFullscreen();
+            } else if (comparison.webkitRequestFullscreen) {
+                await comparison.webkitRequestFullscreen();
+            } else if (comparison.mozRequestFullScreen) {
+                await comparison.mozRequestFullScreen();
+            } else if (comparison.msRequestFullscreen) {
+                await comparison.msRequestFullscreen();
+            }
+            return true;
+        } catch (e) {
+            console.warn('[Fullscreen] フルスクリーンに入れませんでした:', e);
+            return false;
+        }
+    }
+
+    /**
+     * 横向きにロック
+     */
+    async function lockLandscape() {
+        if (!canLockOrientation()) return false;
+
+        try {
+            await screen.orientation.lock('landscape');
+            return true;
+        } catch (e) {
+            console.warn('[Orientation] 横向きロックできませんでした:', e);
+            return false;
+        }
+    }
+
+    /**
+     * ボタンクリック時の処理
+     */
+    async function handleFullscreenClick() {
+        // iOSの場合：回転ガイドを表示
+        if (isIOS()) {
+            rotateGuide.classList.add('show');
+            return;
+        }
+
+        // Android/PC：フルスクリーン + 横向きロック
+        const fullscreenOk = await enterFullscreen();
+
+        if (fullscreenOk) {
+            await lockLandscape();
+        }
+    }
+
+    /**
+     * 回転ガイドを閉じる
+     */
+    function closeRotateGuide() {
+        rotateGuide.classList.remove('show');
+    }
+
+    /**
+     * 横向きになったら回転ガイドを自動で閉じる
+     */
+    function handleOrientationChange() {
+        if (window.innerWidth > window.innerHeight) {
+            closeRotateGuide();
+        }
+    }
+
+    // イベントリスナー
+    fullscreenBtn.addEventListener('click', handleFullscreenClick);
+
+    if (rotateGuideClose) {
+        rotateGuideClose.addEventListener('click', closeRotateGuide);
+    }
+
+    // 回転検知
+    window.addEventListener('resize', handleOrientationChange);
+    window.addEventListener('orientationchange', handleOrientationChange);
+
+    // フルスクリーン終了時に向きロックを解除
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && canLockOrientation()) {
+            screen.orientation.unlock();
+        }
+    });
 })();
 </script>
 
